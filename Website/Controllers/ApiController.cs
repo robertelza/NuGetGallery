@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Data;
+using System.Data.Entity;
 using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
@@ -15,14 +16,16 @@ namespace NuGetGallery
 {
     public partial class ApiController : AppController
     {
-        private readonly IEntitiesContext _entitiesContext;
-        private readonly INuGetExeDownloaderService _nugetExeDownloaderService;
-        private readonly IPackageFileService _packageFileService;
-        private readonly IPackageService _packageService;
-        private readonly IUserService _userService;
-        private readonly IStatisticsService _statisticsService;
-        private readonly IContentService _contentService;
-        private readonly IIndexingService _indexingService;
+        public IEntitiesContext EntitiesContext { get; set; }
+        public INuGetExeDownloaderService NugetExeDownloaderService { get; set; }
+        public IPackageFileService PackageFileService { get; set; }
+        public IPackageService PackageService { get; set; }
+        public IUserService UserService { get; set; }
+        public IStatisticsService StatisticsService { get; set; }
+        public IContentService ContentService { get; set; }
+        public IIndexingService IndexingService { get; set; }
+
+        protected ApiController() { }
 
         public ApiController(
             EntitiesContext entitiesContext,
@@ -33,17 +36,18 @@ namespace NuGetGallery
             IContentService contentService,
             IIndexingService indexingService)
         {
-            _entitiesContext = entitiesContext;
-            _packageService = packageService;
-            _packageFileService = packageFileService;
-            _userService = userService;
-            _nugetExeDownloaderService = nugetExeDownloaderService;
-            _contentService = contentService;
-            _statisticsService = null;
-            _indexingService = indexingService;
+            EntitiesContext = entitiesContext;
+            PackageService = packageService;
+            PackageFileService = packageFileService;
+            UserService = userService;
+            NugetExeDownloaderService = nugetExeDownloaderService;
+            ContentService = contentService;
+            StatisticsService = null;
+            IndexingService = indexingService;
         }
 
         public ApiController(
+            EntitiesContext entitiesContext,
             IPackageService packageService,
             IPackageFileService packageFileService,
             IUserService userService,
@@ -51,9 +55,9 @@ namespace NuGetGallery
             IContentService contentService,
             IIndexingService indexingService,
             IStatisticsService statisticsService)
-            : this(packageService, packageFileService, userService, nugetExeDownloaderService, contentService, indexingService)
+            : this(entitiesContext, packageService, packageFileService, userService, nugetExeDownloaderService, contentService, indexingService)
         {
-            _statisticsService = statisticsService;
+            StatisticsService = statisticsService;
         }
 
         [ActionName("GetPackageApi")]
@@ -82,7 +86,7 @@ namespace NuGetGallery
             // In general we want to try to add download statistics for any package regardless of whether a version was specified.
             try
             {
-                Package package = _packageService.FindPackageByIdAndVersion(id, version, allowPrerelease: false);
+                Package package = PackageService.FindPackageByIdAndVersion(id, version, allowPrerelease: false);
                 if (package == null)
                 {
                     return new HttpStatusCodeWithBodyResult(
@@ -102,7 +106,7 @@ namespace NuGetGallery
                         ProjectGuids = Request.Headers["NuGet-ProjectGuids"],
                     };
 
-                    _packageService.AddDownloadStatistics(stats);
+                    PackageService.AddDownloadStatistics(stats);
                 }
                 catch (ReadOnlyModeException)
                 {
@@ -119,7 +123,7 @@ namespace NuGetGallery
                     QuietlyLogException(e);
                 }
 
-                return await _packageFileService.CreateDownloadPackageActionResultAsync(HttpContext.Request.Url, package);
+                return await PackageFileService.CreateDownloadPackageActionResultAsync(HttpContext.Request.Url, package);
             }
             catch (SqlException e)
             {
@@ -132,7 +136,7 @@ namespace NuGetGallery
 
             // Fall back to constructing the URL based on the package version and ID.
 
-            return await _packageFileService.CreateDownloadPackageActionResultAsync(HttpContext.Request.Url, id, version);
+            return await PackageFileService.CreateDownloadPackageActionResultAsync(HttpContext.Request.Url, id, version);
         }
 
         [HttpGet]
@@ -140,7 +144,7 @@ namespace NuGetGallery
         [OutputCache(VaryByParam = "none", Location = OutputCacheLocation.ServerAndClient, Duration = 600)]
         public virtual Task<ActionResult> GetNuGetExe()
         {
-            return _nugetExeDownloaderService.CreateNuGetExeDownloadActionResultAsync(HttpContext.Request.Url);
+            return NugetExeDownloaderService.CreateNuGetExeDownloadActionResultAsync(HttpContext.Request.Url);
         }
 
         [HttpGet]
@@ -154,7 +158,7 @@ namespace NuGetGallery
                     HttpStatusCode.BadRequest, String.Format(CultureInfo.CurrentCulture, Strings.InvalidApiKey, apiKey));
             }
 
-            var user = _userService.FindByApiKey(parsedApiKey);
+            var user = UserService.FindByApiKey(parsedApiKey);
             if (user == null)
             {
                 return new HttpStatusCodeWithBodyResult(
@@ -164,7 +168,7 @@ namespace NuGetGallery
             if (!String.IsNullOrEmpty(id))
             {
                 // If the partialId is present, then verify that the user has permission to push for the specific Id \ version combination.
-                var package = _packageService.FindPackageByIdAndVersion(id, version);
+                var package = PackageService.FindPackageByIdAndVersion(id, version);
                 if (package == null)
                 {
                     return new HttpStatusCodeWithBodyResult(
@@ -210,9 +214,21 @@ namespace NuGetGallery
             var BlobUrl = (string)token.SelectToken("BlobUrl");
             var SecurityToken = (string)token.SelectToken("SecurityToken");
 
-            var pendingEdit = _entitiesContext.Set<PackageEdit>()
-                .Where(pe => pe.PackageId == PackageId && pe.Version == Version && pe.EditId == EditId)
+            Package p = EntitiesContext.Set<Package>()
+                .Where(p => p.Version == Version && p.PackageRegistration.Id == PackageId)
                 .FirstOrDefault();
+            if (p == null)
+            {
+                return new HttpStatusCodeResult(HttpStatusCode.NotFound);
+            }
+
+            var pendingEdit = EntitiesContext.Set<PackageEdit>()
+                .Where(pe => pe.PackageKey == p.Key && pe.EditId == EditId)
+                .FirstOrDefault();
+            if (pendingEdit == null)
+            {
+                return new HttpStatusCodeResult(HttpStatusCode.NotFound);
+            }
 
             if (SecurityToken == null)
             {
@@ -232,11 +248,11 @@ namespace NuGetGallery
 
             // Asynchronously, the blob being returned for the package has already been changed!
             // We just need to update the database to match.
-            _packageService.DoEditPackage(pendingEdit);
+            PackageService.DoEditPackage(pendingEdit);
 
             // Success
-            pendingEdit.IsCompleted = true;
-            _entitiesContext.SaveChanges();
+            EntitiesContext.SaveChanges();
+            return new HttpStatusCodeResult(HttpStatusCode.OK);
         }
 
         private async Task<ActionResult> CreatePackageInternal(string apiKey)
@@ -248,7 +264,7 @@ namespace NuGetGallery
                     HttpStatusCode.BadRequest, String.Format(CultureInfo.CurrentCulture, Strings.InvalidApiKey, apiKey));
             }
 
-            var user = _userService.FindByApiKey(parsedApiKey);
+            var user = UserService.FindByApiKey(parsedApiKey);
             if (user == null)
             {
                 return new HttpStatusCodeWithBodyResult(
@@ -258,7 +274,7 @@ namespace NuGetGallery
             using (var packageToPush = ReadPackageFromRequest())
             {
                 // Ensure that the user can push packages for this partialId.
-                var packageRegistration = _packageService.FindPackageRegistrationById(packageToPush.Metadata.Id);
+                var packageRegistration = PackageService.FindPackageRegistrationById(packageToPush.Metadata.Id);
                 if (packageRegistration != null)
                 {
                     if (!packageRegistration.IsOwner(user))
@@ -283,10 +299,10 @@ namespace NuGetGallery
                     }
                 }
 
-                var package = _packageService.CreatePackage(packageToPush, user, commitChanges: true);
+                var package = PackageService.CreatePackage(packageToPush, user, commitChanges: true);
                 using (Stream uploadStream = packageToPush.GetStream())
                 {
-                    await _packageFileService.SavePackageFileAsync(package, uploadStream);
+                    await PackageFileService.SavePackageFileAsync(package, uploadStream);
                 }
 
                 if (
@@ -294,7 +310,7 @@ namespace NuGetGallery
                                                      StringComparison.OrdinalIgnoreCase) && package.IsLatestStable)
                 {
                     // If we're pushing a new stable version of NuGet.CommandLine, update the extracted executable.
-                    await _nugetExeDownloaderService.UpdateExecutableAsync(packageToPush);
+                    await NugetExeDownloaderService.UpdateExecutableAsync(packageToPush);
                 }
             }
 
@@ -313,14 +329,14 @@ namespace NuGetGallery
                     HttpStatusCode.BadRequest, String.Format(CultureInfo.CurrentCulture, Strings.InvalidApiKey, apiKey));
             }
 
-            var user = _userService.FindByApiKey(parsedApiKey);
+            var user = UserService.FindByApiKey(parsedApiKey);
             if (user == null)
             {
                 return new HttpStatusCodeWithBodyResult(
                     HttpStatusCode.Forbidden, String.Format(CultureInfo.CurrentCulture, Strings.ApiKeyNotAuthorized, "delete"));
             }
 
-            var package = _packageService.FindPackageByIdAndVersion(id, version);
+            var package = PackageService.FindPackageByIdAndVersion(id, version);
             if (package == null)
             {
                 return new HttpStatusCodeWithBodyResult(
@@ -333,8 +349,8 @@ namespace NuGetGallery
                     HttpStatusCode.Forbidden, String.Format(CultureInfo.CurrentCulture, Strings.ApiKeyNotAuthorized, "delete"));
             }
 
-            _packageService.MarkPackageUnlisted(package);
-            _indexingService.UpdatePackage(package);
+            PackageService.MarkPackageUnlisted(package);
+            IndexingService.UpdatePackage(package);
             return new EmptyResult();
         }
 
@@ -350,14 +366,14 @@ namespace NuGetGallery
                     HttpStatusCode.BadRequest, String.Format(CultureInfo.CurrentCulture, Strings.InvalidApiKey, apiKey));
             }
 
-            var user = _userService.FindByApiKey(parsedApiKey);
+            var user = UserService.FindByApiKey(parsedApiKey);
             if (user == null)
             {
                 return new HttpStatusCodeWithBodyResult(
                     HttpStatusCode.Forbidden, String.Format(CultureInfo.CurrentCulture, Strings.ApiKeyNotAuthorized, "publish"));
             }
 
-            var package = _packageService.FindPackageByIdAndVersion(id, version);
+            var package = PackageService.FindPackageByIdAndVersion(id, version);
             if (package == null)
             {
                 return new HttpStatusCodeWithBodyResult(
@@ -370,14 +386,14 @@ namespace NuGetGallery
                     HttpStatusCode.Forbidden, String.Format(CultureInfo.CurrentCulture, Strings.ApiKeyNotAuthorized, "publish"));
             }
 
-            _packageService.MarkPackageListed(package);
-            _indexingService.UpdatePackage(package);
+            PackageService.MarkPackageListed(package);
+            IndexingService.UpdatePackage(package);
             return new EmptyResult();
         }
 
         public virtual async Task<ActionResult> ServiceAlert()
         {
-            var alert = await _contentService.GetContentItemAsync(Constants.ContentNames.Alert, TimeSpan.Zero);
+            var alert = await ContentService.GetContentItemAsync(Constants.ContentNames.Alert, TimeSpan.Zero);
             return Content(alert == null ? (string)null : alert.ToString(), "text/html");
         }
 
@@ -443,16 +459,16 @@ namespace NuGetGallery
         [HttpGet]
         public virtual async Task<ActionResult> GetStatsDownloads(int? count)
         {
-            if (_statisticsService != null)
+            if (StatisticsService != null)
             {
-                bool isAvailable = await _statisticsService.LoadDownloadPackageVersions();
+                bool isAvailable = await StatisticsService.LoadDownloadPackageVersions();
 
                 if (isAvailable)
                 {
                     int i = 0;
 
                     JArray content = new JArray();
-                    foreach (StatisticsPackagesItemViewModel row in _statisticsService.DownloadPackageVersionsAll)
+                    foreach (StatisticsPackagesItemViewModel row in StatisticsService.DownloadPackageVersionsAll)
                     {
                         JObject item = new JObject();
 
