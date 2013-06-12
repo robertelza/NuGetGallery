@@ -7,8 +7,6 @@ namespace NuGetGallery
     [DisplayColumn("Title")]
     public class Package : IEntity
     {
-
-#pragma warning disable 612
         public Package()
         {
             Dependencies = new HashSet<PackageDependency>();
@@ -16,11 +14,44 @@ namespace NuGetGallery
             Listed = true;
         }
 
-        public string GetTitle()
+#pragma warning disable 612
+        public PackageDescription GetDescription()
         {
-            return this.AppliedEdit != null ? this.AppliedEdit.Title : this.Title;
-        }
+            if (AppliedEdit != null)
+            {
+                return new PackageDescription
+                {
+                    Authors = AppliedEdit.Authors,
+                    Copyright = AppliedEdit.Copyright,
+                    Description = AppliedEdit.Description,
+                    Hash = AppliedEdit.Hash,
+                    HashAlgorithm = AppliedEdit.HashAlgorithm,
+                    IconUrl = AppliedEdit.IconUrl,
+                    PackageFileSize = AppliedEdit.PackageFileSize,
+                    ProjectUrl = AppliedEdit.ProjectUrl,
+                    ReleaseNotes = AppliedEdit.ReleaseNotes,
+                    Summary = AppliedEdit.Summary,
+                    Tags = AppliedEdit.Tags,
+                    Title = AppliedEdit.Title,
+                };
+            }
 
+            return new PackageDescription
+            {
+                Authors = this.FlattenedAuthors,
+                Copyright = this.Copyright,
+                Description = this.Description,
+                Hash = this.Hash,
+                HashAlgorithm = this.HashAlgorithm,
+                IconUrl = this.IconUrl,
+                PackageFileSize = this.PackageFileSize,
+                ProjectUrl = this.ProjectUrl,
+                ReleaseNotes = this.ReleaseNotes,
+                Summary = this.Summary,
+                Tags = this.Tags,
+                Title = this.Title,
+            };
+        }
 #pragma warning restore 612
 
         public PackageRegistration PackageRegistration { get; set; }
@@ -122,6 +153,7 @@ namespace NuGetGallery
         public virtual ICollection<PackageFramework> SupportedFrameworks { get; set; }
 
         // TODO: it would be nice if we could change the feed so that we don't need to flatten authors and dependencies
+        [Obsolete]
         public string FlattenedAuthors { get; set; }
 
         public string FlattenedDependencies { get; set; }

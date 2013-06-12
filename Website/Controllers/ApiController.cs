@@ -214,16 +214,16 @@ namespace NuGetGallery
             var BlobUrl = (string)token.SelectToken("BlobUrl");
             var SecurityToken = (string)token.SelectToken("SecurityToken");
 
-            Package p = EntitiesContext.Set<Package>()
+            Package package = EntitiesContext.Set<Package>()
                 .Where(p => p.Version == Version && p.PackageRegistration.Id == PackageId)
                 .FirstOrDefault();
-            if (p == null)
+            if (package == null)
             {
                 return new HttpStatusCodeResult(HttpStatusCode.NotFound);
             }
 
             var pendingEdit = EntitiesContext.Set<PackageEdit>()
-                .Where(pe => pe.PackageKey == p.Key && pe.EditId == EditId)
+                .Where(pe => pe.PackageKey == package.Key && pe.EditId == EditId)
                 .FirstOrDefault();
             if (pendingEdit == null)
             {
